@@ -166,7 +166,7 @@ streamlit run app.py
 
 ## 🌐 Deployed Application
 
-🔗 **Streamlit Cloud:** `https://share.streamlit.io/YourUsername/IDAI105-YourName/main/app.py`
+🔗 **Streamlit Cloud:** `https://idai105-1000414-aditya-jitendra-kumar-sahani-sa.streamlit.app/`
 
 > Replace with your actual deployed URL after Streamlit Cloud deployment.
 
