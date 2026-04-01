@@ -319,7 +319,8 @@ st.divider()
 # ═════════════════════════════════════════════════════════════
 # TABS
 # ═════════════════════════════════════════════════════════════
-tab_eda, tab_cluster, tab_arm, tab_anom, tab_map, tab_insights = st.tabs([
+tab_scope, tab_eda, tab_cluster, tab_arm, tab_anom, tab_map, tab_insights = st.tabs([
+    "🎯 Project Scope",
     "📊 EDA",
     "🗂️ Clustering",
     "🔗 Association Rules",
