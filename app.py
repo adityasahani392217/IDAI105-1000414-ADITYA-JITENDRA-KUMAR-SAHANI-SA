@@ -331,6 +331,164 @@ tab_scope, tab_eda, tab_cluster, tab_arm, tab_anom, tab_map, tab_insights = st.t
 
 
 # ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 0 — PROJECT SCOPE                                    ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_scope:
+    st.markdown('<div class="section-title">Stage 1 — Project Scope Definition</div>',
+                unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="insight-box">
+    <b>Scenario:</b> SmartCharging Analytics — Uncovering EV Behaviour Patterns<br>
+    <b>Organisation:</b> SmartEnergy Data Lab<br>
+    <b>Role:</b> Data Analyst working with EV charging infrastructure providers
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("### 🎯 Project Objectives")
+    obj_col1, obj_col2 = st.columns(2)
+    with obj_col1:
+        st.markdown("""
+        <div class="insight-box"><b>1. Cluster Charging Behaviours</b><br>
+        Group EV charging stations based on usage stats, charging capacity, cost, distance
+        to city, and availability hours using K-Means clustering.</div>
+        """, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="insight-box"><b>2. Detect Anomalies</b><br>
+        Identify unusual station behaviour — overuse, faulty stations, or abnormal
+        charging patterns — using Z-Score, IQR, and Isolation Forest (consensus method).</div>
+        """, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="insight-box"><b>3. Discover Time-Based Associations</b><br>
+        Apply the Apriori algorithm to find relationships between charger type, usage
+        level, cost tier, distance tier, capacity, and availability to optimise scheduling
+        and pricing strategies.</div>
+        """, unsafe_allow_html=True)
+
+    with obj_col2:
+        st.markdown("""
+        <div class="green-box"><b>4. Enhance Infrastructure Planning</b><br>
+        Support decision-making on where and when to expand charging stations by
+        analysing geographic demand patterns and operator performance.</div>
+        """, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="green-box"><b>5. Deploy Insights</b><br>
+        Build this interactive Streamlit dashboard for real-time exploration of
+        charging patterns, anomalies, cluster profiles, and association rules.</div>
+        """, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="warn-box"><b>6. Exploratory Data Analysis (EDA)</b><br>
+        Uncover trends in usage distribution, charger type performance, operator
+        costs, renewable energy impact, and geographic demand via rich visualisations.</div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("### 📦 Dataset Overview")
+    ds_col1, ds_col2 = st.columns([1, 1])
+    with ds_col1:
+        st.markdown("#### Key Columns")
+        dataset_info = {
+            "Column": [
+                "Station ID", "Charger Type", "Availability",
+                "Station Operator", "Cost (USD/kWh)",
+                "Usage Stats (avg users/day)", "Charging Capacity (kW)",
+                "Distance to City (km)", "Reviews (Rating)",
+                "Renewable Energy Source", "Maintenance Frequency",
+                "Connector Types", "Parking Spots", "Installation Year",
+                "Latitude / Longitude",
+            ],
+            "Description": [
+                "Unique station identifier",
+                "AC Level 1 / AC Level 2 / DC Fast Charger",
+                "Operating hours (24/7, 6:00-22:00, 9:00-18:00)",
+                "Company operating the station",
+                "Price per kWh charged to the customer",
+                "Average number of users per day",
+                "Maximum charging power output (kW)",
+                "Proximity to nearest urban centre",
+                "Customer satisfaction score (1–5)",
+                "Whether station uses renewable energy (Yes/No)",
+                "Frequency of maintenance (Annual/Quarterly/Monthly)",
+                "Plug standards supported at the station",
+                "Number of available parking bays",
+                "Year the station was commissioned",
+                "Geographic coordinates for map visualisation",
+            ],
+        }
+        st.dataframe(pd.DataFrame(dataset_info), use_container_width=True, hide_index=True)
+
+    with ds_col2:
+        st.markdown("#### Live Dataset Summary")
+        m1, m2 = st.columns(2)
+        m1.metric("Total Stations", f"{len(df_full):,}")
+        m2.metric("Filtered Stations", f"{len(df):,}")
+        m1.metric("Charger Types", df_full["Charger Type"].nunique())
+        m2.metric("Station Operators", df_full["Station Operator"].nunique())
+        m1.metric("Year Range",
+                  f"{int(df_full['Installation Year'].min())}–{int(df_full['Installation Year'].max())}")
+        m2.metric("Renewable Stations",
+                  f"{(df_full['Renewable Energy Source']=='Yes').sum():,}")
+
+        missing_pct = (df_full.isnull().sum().sum() /
+                       (df_full.shape[0] * df_full.shape[1]) * 100)
+        st.markdown(f"""
+        <div class="green-box">
+        <b>Missing data (post-imputation):</b> {missing_pct:.2f}%<br>
+        All missing numeric values filled with <b>column median</b>;
+        categorical gaps filled with <b>mode</b>.
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("### 🛠️ Methodology Pipeline")
+    steps = [
+        ("Stage 1", "Project Scope Definition",
+         "Define objectives, identify dataset columns, set KPIs."),
+        ("Stage 2", "Data Cleaning & Preprocessing",
+         "Deduplicate, impute nulls, encode categoricals (ordinal + binary), normalise numerics with StandardScaler."),
+        ("Stage 3", "Exploratory Data Analysis",
+         "Histograms, box plots, bar charts, scatter plots, heatmaps, correlation matrix."),
+        ("Stage 4", "Clustering Analysis",
+         "K-Means with Elbow Method + Silhouette Score; auto-label clusters; visualise profiles."),
+        ("Stage 5", "Association Rule Mining",
+         "Apriori algorithm on binned features; filter by support, confidence, lift; visualise top rules."),
+        ("Stage 6", "Anomaly Detection",
+         "Z-Score, IQR, Isolation Forest (multivariate); consensus flagging (≥2 of 3 methods); demographic breakdown."),
+        ("Stage 7", "Deployment",
+         "Interactive Streamlit dashboard with sidebar filters, 6 analytical tabs, KPI strip, geo map."),
+    ]
+    pipe_df = pd.DataFrame(steps, columns=["Stage", "Title", "Description"])
+    st.dataframe(pipe_df, use_container_width=True, hide_index=True)
+
+    st.markdown("### 🔬 Tools & Libraries")
+    tools_col1, tools_col2, tools_col3 = st.columns(3)
+    with tools_col1:
+        st.markdown("""
+        <div class="insight-box">
+        <b>Data Processing</b><br>
+        • pandas — data manipulation<br>
+        • numpy — numerical operations<br>
+        • scikit-learn — preprocessing & models<br>
+        • scipy — statistical methods
+        </div>""", unsafe_allow_html=True)
+    with tools_col2:
+        st.markdown("""
+        <div class="insight-box">
+        <b>Machine Learning</b><br>
+        • KMeans — clustering<br>
+        • IsolationForest — anomaly detection<br>
+        • mlxtend Apriori — association rules<br>
+        • silhouette_score — cluster evaluation
+        </div>""", unsafe_allow_html=True)
+    with tools_col3:
+        st.markdown("""
+        <div class="insight-box">
+        <b>Visualisation & Deployment</b><br>
+        • Plotly Express / Graph Objects<br>
+        • Streamlit — interactive dashboard<br>
+        • scatter_mapbox — geographic maps<br>
+        • density_mapbox — usage heatmaps
+        </div>""", unsafe_allow_html=True)
+
+
+# ╔═══════════════════════════════════════════════════════════╗
 # ║  TAB 1 — EDA                                              ║
 # ╚═══════════════════════════════════════════════════════════╝
 with tab_eda:
