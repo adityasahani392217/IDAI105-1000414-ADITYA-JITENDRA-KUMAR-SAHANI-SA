@@ -1,587 +1,1025 @@
 """
-SmartCharging Analytics Dashboard
-Scenario 2 — Data Mining Summative Assessment
-Deploy: streamlit run app.py
+╔══════════════════════════════════════════════════════════════╗
+║   SmartCharging Analytics — Uncovering EV Behaviour Patterns ║
+║   Data Mining | Year 1 Summative Assessment | Scenario 2     ║
+║   Deploy: streamlit run app.py                               ║
+╚══════════════════════════════════════════════════════════════╝
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.ensemble import IsolationForest
+from sklearn.metrics import silhouette_score
+from scipy import stats
 from mlxtend.frequent_patterns import apriori, association_rules
 from mlxtend.preprocessing import TransactionEncoder
-from scipy import stats
 import warnings
 warnings.filterwarnings("ignore")
 
-# ── PAGE CONFIG ───────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# PAGE CONFIG
+# ─────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="SmartCharging Analytics",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
-# ── CUSTOM CSS ────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main-header {
-        font-size: 2.2rem; font-weight: 700;
-        color: #1e88e5; text-align: center;
-        margin-bottom: 0.2rem;
-    }
-    .sub-header {
-        font-size: 1rem; color: #555;
-        text-align: center; margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background: #f0f4ff; border-radius: 10px;
-        padding: 1rem; text-align: center;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 1rem;
-    }
+[data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 700; }
+[data-testid="stMetricLabel"] { font-size: 0.78rem; color: #666; }
+.section-title {
+    font-size: 1.35rem; font-weight: 700; color: #1565C0;
+    border-left: 4px solid #1565C0; padding-left: 10px;
+    margin: 1rem 0 0.5rem 0;
+}
+.insight-box {
+    background: #E3F2FD; border-left: 4px solid #1565C0;
+    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
+    font-size: 0.93rem; color: #1C1C1C;
+}
+.warn-box {
+    background: #FFF8E1; border-left: 4px solid #F9A825;
+    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
+    font-size: 0.93rem;
+}
+.danger-box {
+    background: #FFEBEE; border-left: 4px solid #C62828;
+    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
+    font-size: 0.93rem;
+}
+.green-box {
+    background: #E8F5E9; border-left: 4px solid #2E7D32;
+    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
+    font-size: 0.93rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── DATA LOADING & CACHING ────────────────────────────────────
-@st.cache_data
-def load_data(uploaded_file=None):
-    """Load dataset; fall back to synthetic demo data if no file."""
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
+# ─────────────────────────────────────────────────────────────
+# DATA LOADING & PREPROCESSING  (cached)
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Loading & preprocessing data…")
+def load_and_prepare(file=None):
+    if file is not None:
+        df = pd.read_csv(file)
     else:
-        # --- SYNTHETIC DEMO DATA ---
-        np.random.seed(42)
-        n = 500
-        charger_types = ["AC Level 1", "AC Level 2", "DC Fast"]
-        operators = ["ChargePoint", "Tesla", "EVgo", "Blink", "Shell", "BP Pulse"]
-        renewable = ["Yes", "No"]
-        availability = ["Available", "In Use", "Offline"]
-        maint = ["Weekly", "Monthly", "Quarterly", "Annually"]
+        df = pd.read_csv("detailed_ev_charging_stations.csv")
 
-        df = pd.DataFrame({
-            "Station ID": [f"STA{i:04d}" for i in range(n)],
-            "Latitude": np.random.uniform(25, 55, n),
-            "Longitude": np.random.uniform(-120, 20, n),
-            "Address": [f"Address {i}" for i in range(n)],
-            "Charger Type": np.random.choice(charger_types, n,
-                                              p=[0.2, 0.45, 0.35]),
-            "Cost (USD/kWh)": np.round(np.random.uniform(0.10, 0.55, n), 3),
-            "Availability": np.random.choice(availability, n,
-                                              p=[0.55, 0.35, 0.10]),
-            "Distance to City (km)": np.round(np.random.exponential(25, n), 1),
-            "Usage Stats (avg users/day)": np.round(
-                np.clip(np.random.normal(18, 8, n), 1, 60), 1),
-            "Station Operator": np.random.choice(operators, n),
-            "Charging Capacity (kW)": np.random.choice(
-                [7.2, 11, 22, 50, 150, 350], n, p=[0.1,0.15,0.2,0.25,0.2,0.1]),
-            "Connector Types": np.random.choice(
-                ["CCS", "CHAdeMO", "Type 2", "Tesla"], n),
-            "Installation Year": np.random.choice(range(2015, 2024), n),
-            "Renewable Energy Source": np.random.choice(renewable, n,
-                                                         p=[0.4, 0.6]),
-            "Reviews (Rating)": np.round(
-                np.clip(np.random.normal(3.8, 0.7, n), 1, 5), 1),
-            "Parking Spots": np.random.randint(2, 20, n),
-            "Maintenance Frequency": np.random.choice(maint, n),
-        })
-        # Inject realistic anomalies
-        anomaly_idx = np.random.choice(n, 25, replace=False)
-        df.loc[anomaly_idx, "Usage Stats (avg users/day)"] = (
-            np.random.uniform(55, 80, 25))
-        df.loc[anomaly_idx[:10], "Cost (USD/kWh)"] = (
-            np.random.uniform(0.60, 0.90, 10))
-        df.loc[anomaly_idx[:10], "Reviews (Rating)"] = (
-            np.random.uniform(1, 1.8, 10))
+    # ── Deduplication ─────────────────────────────────────
+    df.drop_duplicates(subset="Station ID", keep="first", inplace=True)
+    df.reset_index(drop=True, inplace=True)
 
-    return df
-
-
-@st.cache_data
-def preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.drop_duplicates(
-        subset="Station ID" if "Station ID" in df.columns else df.columns[0])
-    num_cols = ["Reviews (Rating)", "Charging Capacity (kW)",
-                "Cost (USD/kWh)", "Usage Stats (avg users/day)",
-                "Distance to City (km)", "Parking Spots"]
+    # ── Missing value imputation (robust, even if no nulls)
+    num_cols = ["Cost (USD/kWh)", "Distance to City (km)",
+                "Usage Stats (avg users/day)", "Charging Capacity (kW)",
+                "Reviews (Rating)", "Parking Spots"]
     for c in num_cols:
-        if c in df.columns:
-            df[c] = df[c].fillna(df[c].median())
+        df[c] = df[c].fillna(df[c].median())
 
-    cat_cols = ["Renewable Energy Source", "Connector Types",
-                "Charger Type", "Station Operator",
-                "Availability", "Maintenance Frequency"]
+    cat_cols = ["Charger Type", "Availability", "Station Operator",
+                "Renewable Energy Source", "Maintenance Frequency",
+                "Connector Types"]
     for c in cat_cols:
-        if c in df.columns:
-            df[c] = df[c].fillna(df[c].mode()[0])
+        df[c] = df[c].fillna(df[c].mode()[0])
 
-    if "Renewable Energy Source" in df.columns:
-        df["Renewable_Enc"] = (df["Renewable Energy Source"]
-                               .str.lower().map({"yes": 1, "no": 0}).fillna(0))
-    if "Availability" in df.columns:
-        df["Avail_Enc"] = (df["Availability"].str.lower()
-                           .map({"available": 1}).fillna(0))
-    if "Charger Type" in df.columns:
-        df["Charger_Enc"] = (df["Charger Type"]
-                             .map({"AC Level 1": 1, "AC Level 2": 2, "DC Fast": 3})
-                             .fillna(1))
-    if "Maintenance Frequency" in df.columns:
-        maint_map = {"Weekly":4,"Monthly":3,"Quarterly":2,"Annually":1,"Rarely":0}
-        df["Maint_Enc"] = df["Maintenance Frequency"].map(maint_map).fillna(1)
+    # ── Encoding ─────────────────────────────────────────
+    df["Renewable_Enc"] = (df["Renewable Energy Source"]
+                           .str.strip().str.lower()
+                           .map({"yes": 1, "no": 0}).fillna(0).astype(int))
 
-    scaler = StandardScaler()
+    charger_ord = {"AC Level 1": 1, "AC Level 2": 2, "DC Fast Charger": 3}
+    df["Charger_Enc"] = df["Charger Type"].map(charger_ord).fillna(1).astype(int)
+
+    avail_hrs = {"24/7": 24, "6:00-22:00": 16, "9:00-18:00": 9}
+    df["Avail_Hours"] = df["Availability"].map(avail_hrs).fillna(12).astype(int)
+
+    maint_ord = {"Annually": 1, "Quarterly": 2, "Monthly": 3}
+    df["Maint_Enc"] = (df["Maintenance Frequency"]
+                       .map(maint_ord).fillna(1).astype(int))
+
+    # ── Normalisation ─────────────────────────────────────
     scale_cols = ["Cost (USD/kWh)", "Usage Stats (avg users/day)",
                   "Charging Capacity (kW)", "Distance to City (km)",
-                  "Reviews (Rating)"]
-    existing = [c for c in scale_cols if c in df.columns]
-    scaled = scaler.fit_transform(df[existing])
-    for i, c in enumerate(existing):
+                  "Reviews (Rating)", "Parking Spots", "Avail_Hours"]
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(df[scale_cols])
+    for i, c in enumerate(scale_cols):
         df[c + "_sc"] = scaled[:, i]
+
     return df
 
 
-# ── SIDEBAR ───────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# CLUSTERING  (cached on K)
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Running K-Means…")
+def run_kmeans(_df, k):
+    feat = ["Usage Stats (avg users/day)_sc",
+            "Charging Capacity (kW)_sc",
+            "Cost (USD/kWh)_sc",
+            "Distance to City (km)_sc",
+            "Avail_Hours_sc"]
+    X = _df[feat].values
+    km = KMeans(n_clusters=k, random_state=42, n_init=15)
+    labels = km.fit_predict(X)
+    sil = silhouette_score(X, labels)
+    return labels, sil
+
+
+@st.cache_data(show_spinner="Computing elbow…")
+def elbow_data(_df):
+    feat = ["Usage Stats (avg users/day)_sc",
+            "Charging Capacity (kW)_sc",
+            "Cost (USD/kWh)_sc",
+            "Distance to City (km)_sc",
+            "Avail_Hours_sc"]
+    X = _df[feat].values
+    inertias, sils = [], []
+    for k in range(2, 11):
+        km = KMeans(n_clusters=k, random_state=42, n_init=10)
+        lbl = km.fit_predict(X)
+        inertias.append(km.inertia_)
+        sils.append(silhouette_score(X, lbl))
+    return list(range(2, 11)), inertias, sils
+
+
+# ─────────────────────────────────────────────────────────────
+# ANOMALY DETECTION  (cached)
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Detecting anomalies…")
+def detect_anomalies(_df, contamination):
+    df = _df.copy()
+    usage = df["Usage Stats (avg users/day)"]
+
+    # Z-Score
+    df["Z_Score"] = np.abs(stats.zscore(usage))
+    df["Anom_Z"] = (df["Z_Score"] > 3).astype(int)
+
+    # IQR
+    Q1, Q3 = usage.quantile(0.25), usage.quantile(0.75)
+    IQR = Q3 - Q1
+    df["Anom_IQR"] = (
+        (usage < Q1 - 1.5 * IQR) | (usage > Q3 + 1.5 * IQR)
+    ).astype(int)
+
+    # Isolation Forest (multivariate)
+    iso_feat = ["Usage Stats (avg users/day)_sc", "Cost (USD/kWh)_sc",
+                "Charging Capacity (kW)_sc", "Reviews (Rating)_sc",
+                "Maint_Enc"]
+    iso = IsolationForest(contamination=contamination, random_state=42)
+    df["Anom_IF"] = (iso.fit_predict(df[iso_feat]) == -1).astype(int)
+
+    # Consensus: flagged by 2+ methods
+    df["Anom_Score"] = df["Anom_Z"] + df["Anom_IQR"] + df["Anom_IF"]
+    df["Anomaly"] = (df["Anom_Score"] >= 2).astype(int)
+
+    # High-cost + low-rating anomaly
+    cost_q85 = df["Cost (USD/kWh)"].quantile(0.85)
+    rate_q15 = df["Reviews (Rating)"].quantile(0.15)
+    df["HiCost_LowRating"] = (
+        (df["Cost (USD/kWh)"] >= cost_q85) &
+        (df["Reviews (Rating)"] <= rate_q15)
+    ).astype(int)
+
+    return df
+
+
+# ─────────────────────────────────────────────────────────────
+# ARM  (cached on thresholds)
+# ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner="Mining association rules…")
+def run_arm(_df, min_sup, min_conf):
+    df = _df.copy()
+
+    df["Usage_Bin"] = pd.cut(df["Usage Stats (avg users/day)"],
+                              bins=[0, 40, 70, 101],
+                              labels=["Low_Usage", "Med_Usage", "High_Usage"])
+    df["Cost_Bin"]  = pd.cut(df["Cost (USD/kWh)"],
+                              bins=3,
+                              labels=["Low_Cost", "Med_Cost", "High_Cost"])
+    df["Dist_Bin"]  = pd.cut(df["Distance to City (km)"],
+                              bins=[0, 20, 50, 9999],
+                              labels=["Near_City", "Mid_Dist", "Far_Rural"])
+    df["Cap_Bin"]   = df["Charging Capacity (kW)"].map(
+                        {22: "Cap_22kW", 50: "Cap_50kW",
+                         150: "Cap_150kW", 350: "Cap_350kW"})
+
+    basket_cols = ["Charger Type", "Usage_Bin", "Cost_Bin",
+                   "Dist_Bin", "Cap_Bin",
+                   "Renewable Energy Source", "Availability",
+                   "Maintenance Frequency"]
+    transactions = df[basket_cols].astype(str).values.tolist()
+
+    te = TransactionEncoder()
+    te_arr = te.fit_transform(transactions)
+    bdf = pd.DataFrame(te_arr, columns=te.columns_)
+
+    freq = apriori(bdf, min_support=min_sup, use_colnames=True)
+    if len(freq) == 0:
+        return pd.DataFrame(), 0
+
+    rules = association_rules(freq, metric="confidence",
+                              min_threshold=min_conf)
+    rules = rules.sort_values("lift", ascending=False).reset_index(drop=True)
+    return rules, len(freq)
+
+
+# ═════════════════════════════════════════════════════════════
+# SIDEBAR
+# ═════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.image("https://img.icons8.com/color/96/000000/electric-car.png", width=80)
-    st.title("⚡ SmartCharging")
-    st.caption("EV Analytics Dashboard")
+    st.markdown("## ⚡ SmartCharging Analytics")
+    st.caption("SmartEnergy Data Lab | EV Infrastructure Intelligence")
+    st.divider()
 
-    st.markdown("---")
-    uploaded = st.file_uploader("📂 Upload Dataset (CSV)",
-                                 type=["csv"])
-    st.markdown("---")
-    st.markdown("**Filters**")
+    uploaded = st.file_uploader("📂 Upload CSV Dataset", type=["csv"],
+                                 help="Upload detailed_ev_charging_stations.csv")
+    st.divider()
 
-    df_raw = load_data(uploaded)
-    df = preprocess(df_raw.copy())
+    df_full = load_and_prepare(uploaded)
 
-    charger_filter = st.multiselect(
-        "Charger Type",
-        options=df["Charger Type"].unique().tolist() if "Charger Type" in df.columns else [],
-        default=df["Charger Type"].unique().tolist() if "Charger Type" in df.columns else []
-    )
-    renewable_filter = st.multiselect(
-        "Renewable Energy",
-        options=df["Renewable Energy Source"].unique().tolist() if "Renewable Energy Source" in df.columns else [],
-        default=df["Renewable Energy Source"].unique().tolist() if "Renewable Energy Source" in df.columns else []
-    )
-    n_clusters = st.slider("K-Means Clusters", 2, 8, 4)
+    st.markdown("### 🔽 Global Filters")
+    charger_opts = sorted(df_full["Charger Type"].unique())
+    sel_charger = st.multiselect("Charger Type", charger_opts,
+                                  default=charger_opts)
 
-    if charger_filter and "Charger Type" in df.columns:
-        df = df[df["Charger Type"].isin(charger_filter)]
-    if renewable_filter and "Renewable Energy Source" in df.columns:
-        df = df[df["Renewable Energy Source"].isin(renewable_filter)]
+    operator_opts = sorted(df_full["Station Operator"].unique())
+    sel_operator = st.multiselect("Station Operator", operator_opts,
+                                   default=operator_opts)
 
-    st.markdown("---")
-    st.info(f"📊 **{len(df):,}** stations loaded")
+    sel_renewable = st.multiselect("Renewable Energy",
+                                    ["Yes", "No"], default=["Yes", "No"])
 
+    year_min = int(df_full["Installation Year"].min())
+    year_max = int(df_full["Installation Year"].max())
+    sel_years = st.slider("Installation Year", year_min, year_max,
+                           (year_min, year_max))
 
-# ── HEADER ────────────────────────────────────────────────────
-st.markdown('<div class="main-header">⚡ SmartCharging Analytics Dashboard</div>',
-            unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Uncovering EV Behaviour Patterns | '
-            'SmartEnergy Data Lab</div>', unsafe_allow_html=True)
+    st.divider()
+    st.markdown("### ⚙️ Analysis Settings")
+    n_clusters = st.slider("K-Means Clusters (K)", 2, 8, 4)
+    contamination = st.slider("Anomaly Contamination %", 1, 20, 5) / 100
+    arm_sup  = st.slider("ARM Min Support",    0.05, 0.40, 0.15, 0.01)
+    arm_conf = st.slider("ARM Min Confidence", 0.30, 0.90, 0.50, 0.05)
+    st.divider()
 
-# ── KPI METRICS ───────────────────────────────────────────────
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("🔌 Total Stations", f"{len(df):,}")
-col2.metric("📈 Avg Users/Day",
-            f"{df['Usage Stats (avg users/day)'].mean():.1f}")
-col3.metric("💰 Avg Cost/kWh",
-            f"${df['Cost (USD/kWh)'].mean():.3f}")
-col4.metric("⭐ Avg Rating",
-            f"{df['Reviews (Rating)'].mean():.2f}/5")
-if "Renewable Energy Source" in df.columns:
-    pct = (df["Renewable Energy Source"].str.lower() == "yes").mean() * 100
-    col5.metric("🌿 Renewable %", f"{pct:.1f}%")
+    # Apply filters
+    df = df_full.copy()
+    if sel_charger:
+        df = df[df["Charger Type"].isin(sel_charger)]
+    if sel_operator:
+        df = df[df["Station Operator"].isin(sel_operator)]
+    if sel_renewable:
+        df = df[df["Renewable Energy Source"].isin(sel_renewable)]
+    df = df[df["Installation Year"].between(sel_years[0], sel_years[1])]
+    df = df.reset_index(drop=True)
 
-st.markdown("---")
-
-# ── TABS ──────────────────────────────────────────────────────
-tabs = st.tabs(["📊 EDA", "🗂️ Clustering", "🔗 Association Rules",
-                "🚨 Anomaly Detection", "🗺️ Geo Map", "📋 Insights"])
+    st.info(f"**{len(df):,}** stations selected")
 
 
-# ════════════════════════════════════════════════════════════════
-# TAB 1 — EDA
-# ════════════════════════════════════════════════════════════════
-with tabs[0]:
-    st.subheader("Exploratory Data Analysis")
+# ═════════════════════════════════════════════════════════════
+# HEADER
+# ═════════════════════════════════════════════════════════════
+st.markdown(
+    "<h1 style='text-align:center;color:#1565C0;margin-bottom:0'>"
+    "⚡ SmartCharging Analytics Dashboard</h1>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<p style='text-align:center;color:#666;margin-top:4px'>"
+    "Uncovering EV Behaviour Patterns | SmartEnergy Data Lab | "
+    "Data Mining Summative Assessment</p>",
+    unsafe_allow_html=True,
+)
+st.divider()
 
+# KPI STRIP
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1.metric("🔌 Stations",       f"{len(df):,}")
+k2.metric("📈 Avg Users/Day",  f"{df['Usage Stats (avg users/day)'].mean():.1f}")
+k3.metric("💰 Avg Cost/kWh",   f"${df['Cost (USD/kWh)'].mean():.3f}")
+k4.metric("⭐ Avg Rating",      f"{df['Reviews (Rating)'].mean():.2f}")
+k5.metric("⚡ Avg Capacity",    f"{df['Charging Capacity (kW)'].mean():.0f} kW")
+pct_ren = (df["Renewable Energy Source"] == "Yes").mean() * 100
+k6.metric("🌿 Renewable",       f"{pct_ren:.1f}%")
+
+st.divider()
+
+
+# ═════════════════════════════════════════════════════════════
+# TABS
+# ═════════════════════════════════════════════════════════════
+tab_eda, tab_cluster, tab_arm, tab_anom, tab_map, tab_insights = st.tabs([
+    "📊 EDA",
+    "🗂️ Clustering",
+    "🔗 Association Rules",
+    "🚨 Anomaly Detection",
+    "🗺️ Geo Map",
+    "📋 Insights & Recommendations",
+])
+
+
+# ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 1 — EDA                                              ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_eda:
+    st.markdown('<div class="section-title">Exploratory Data Analysis</div>',
+                unsafe_allow_html=True)
+
+    # ── Row 1: Usage Distribution + Users by Charger Type ────
     c1, c2 = st.columns(2)
     with c1:
-        fig = px.histogram(df, x="Usage Stats (avg users/day)",
-                           nbins=30, color_discrete_sequence=["#1e88e5"],
-                           title="Distribution: Avg Users/Day",
-                           marginal="box")
+        fig = px.histogram(
+            df, x="Usage Stats (avg users/day)", nbins=30,
+            color="Charger Type",
+            color_discrete_map={"AC Level 1": "#64B5F6",
+                                 "AC Level 2": "#1E88E5",
+                                 "DC Fast Charger": "#0D47A1"},
+            barmode="overlay", opacity=0.75,
+            title="Distribution of Avg Daily Users by Charger Type",
+            labels={"Usage Stats (avg users/day)": "Avg Users/Day"},
+        )
+        fig.update_layout(legend=dict(orientation="h", y=-0.25))
         st.plotly_chart(fig, use_container_width=True)
 
     with c2:
-        if "Charger Type" in df.columns:
-            avg_u = (df.groupby("Charger Type")
-                       ["Usage Stats (avg users/day)"].mean()
-                       .reset_index())
-            fig = px.bar(avg_u, x="Charger Type",
-                         y="Usage Stats (avg users/day)",
-                         color="Charger Type",
-                         title="Avg Daily Users by Charger Type",
-                         color_discrete_sequence=px.colors.qualitative.Set2)
-            st.plotly_chart(fig, use_container_width=True)
+        avg_by_charger = (
+            df.groupby("Charger Type", as_index=False)
+              ["Usage Stats (avg users/day)"].mean()
+              .sort_values("Usage Stats (avg users/day)", ascending=True)
+        )
+        fig = px.bar(
+            avg_by_charger, y="Charger Type",
+            x="Usage Stats (avg users/day)",
+            orientation="h",
+            color="Charger Type",
+            color_discrete_map={"AC Level 1": "#64B5F6",
+                                 "AC Level 2": "#1E88E5",
+                                 "DC Fast Charger": "#0D47A1"},
+            title="Average Daily Users by Charger Type",
+            text_auto=".1f",
+        )
+        fig.update_traces(textposition="outside")
+        fig.update_layout(showlegend=False, xaxis_title="Avg Users/Day")
+        st.plotly_chart(fig, use_container_width=True)
 
+    # ── Row 2: Usage Over Installation Year + Operator Cost ──
     c3, c4 = st.columns(2)
     with c3:
-        if "Installation Year" in df.columns:
-            yearly = (df.groupby("Installation Year")
-                        ["Usage Stats (avg users/day)"].mean().reset_index())
-            fig = px.line(yearly, x="Installation Year",
-                          y="Usage Stats (avg users/day)",
-                          markers=True,
-                          title="Avg Users/Day vs Installation Year",
-                          color_discrete_sequence=["#43a047"])
-            st.plotly_chart(fig, use_container_width=True)
+        yearly = (
+            df.groupby("Installation Year", as_index=False)
+              ["Usage Stats (avg users/day)"].mean()
+        )
+        fig = px.line(
+            yearly, x="Installation Year",
+            y="Usage Stats (avg users/day)",
+            markers=True,
+            title="Avg Daily Users by Installation Year",
+            color_discrete_sequence=["#1565C0"],
+        )
+        fig.update_traces(fill="tozeroy", fillcolor="rgba(21,101,192,0.1)")
+        fig.update_layout(yaxis_title="Avg Users/Day")
+        st.plotly_chart(fig, use_container_width=True)
 
     with c4:
-        if "Station Operator" in df.columns:
-            top_ops = df["Station Operator"].value_counts().head(8).index
-            sub = df[df["Station Operator"].isin(top_ops)]
-            fig = px.box(sub, x="Station Operator", y="Cost (USD/kWh)",
-                         color="Station Operator",
-                         title="Cost by Operator (Top 8)",
-                         color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig.update_xaxes(tickangle=30)
-            st.plotly_chart(fig, use_container_width=True)
+        fig = px.box(
+            df, x="Station Operator", y="Cost (USD/kWh)",
+            color="Station Operator",
+            color_discrete_sequence=px.colors.qualitative.Set2,
+            title="Cost Distribution by Station Operator",
+        )
+        fig.update_layout(showlegend=False,
+                          xaxis_title="", yaxis_title="Cost (USD/kWh)")
+        st.plotly_chart(fig, use_container_width=True)
 
-    # Correlation heatmap
-    st.subheader("Correlation Heatmap")
-    num_f = ["Cost (USD/kWh)", "Usage Stats (avg users/day)",
-             "Charging Capacity (kW)", "Distance to City (km)",
-             "Reviews (Rating)", "Parking Spots",
-             "Renewable_Enc", "Charger_Enc", "Avail_Enc"]
-    existing = [c for c in num_f if c in df.columns]
-    corr_matrix = df[existing].corr()
-    fig = px.imshow(corr_matrix, text_auto=".2f",
-                    color_continuous_scale="RdBu_r",
-                    zmin=-1, zmax=1,
-                    title="Feature Correlation Matrix")
+    # ── Row 3: Heatmap + Reviews vs Usage ────────────────────
+    c5, c6 = st.columns(2)
+    with c5:
+        pivot = df.pivot_table(
+            values="Usage Stats (avg users/day)",
+            index="Charger Type",
+            columns="Availability",
+            aggfunc="mean",
+        ).round(1)
+        fig = px.imshow(
+            pivot, text_auto=True, color_continuous_scale="Blues",
+            title="Avg Users/Day: Charger Type × Availability Hours",
+            aspect="auto",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with c6:
+        fig = px.scatter(
+            df.sample(min(1500, len(df)), random_state=42),
+            x="Reviews (Rating)", y="Usage Stats (avg users/day)",
+            color="Charger Type",
+            color_discrete_map={"AC Level 1": "#64B5F6",
+                                 "AC Level 2": "#1E88E5",
+                                 "DC Fast Charger": "#0D47A1"},
+            size="Charging Capacity (kW)",
+            opacity=0.65,
+            title="Reviews vs Daily Users (size = Charging Capacity)",
+            labels={"Usage Stats (avg users/day)": "Avg Users/Day"},
+        )
+        fig.update_layout(legend=dict(orientation="h", y=-0.25))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Row 4: Renewable + Capacity bar ──────────────────────
+    c7, c8 = st.columns(2)
+    with c7:
+        ren_grp = (
+            df.groupby("Renewable Energy Source", as_index=False)
+              .agg(Avg_Users=("Usage Stats (avg users/day)", "mean"))
+        )
+        fig = px.bar(
+            ren_grp, x="Renewable Energy Source", y="Avg_Users",
+            color="Renewable Energy Source",
+            color_discrete_map={"Yes": "#43A047", "No": "#E53935"},
+            text_auto=".1f",
+            title="Avg Daily Users: Renewable vs Non-Renewable",
+        )
+        fig.update_layout(showlegend=False, yaxis_title="Avg Users/Day")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with c8:
+        cap_grp = (
+            df.groupby("Charging Capacity (kW)", as_index=False)
+              ["Usage Stats (avg users/day)"].mean()
+              .sort_values("Charging Capacity (kW)")
+        )
+        fig = px.bar(
+            cap_grp, x="Charging Capacity (kW)",
+            y="Usage Stats (avg users/day)",
+            color="Charging Capacity (kW)",
+            color_continuous_scale="Blues",
+            text_auto=".1f",
+            title="Avg Daily Users by Charging Capacity (kW)",
+        )
+        fig.update_layout(yaxis_title="Avg Users/Day",
+                          xaxis=dict(type="category"))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # ── Correlation Heatmap ───────────────────────────────────
+    st.markdown('<div class="section-title">Feature Correlation Matrix</div>',
+                unsafe_allow_html=True)
+    num_feat = ["Cost (USD/kWh)", "Usage Stats (avg users/day)",
+                "Charging Capacity (kW)", "Distance to City (km)",
+                "Reviews (Rating)", "Parking Spots",
+                "Renewable_Enc", "Charger_Enc", "Avail_Hours", "Maint_Enc"]
+    existing = [c for c in num_feat if c in df.columns]
+    corr = df[existing].corr().round(2)
+    fig = px.imshow(
+        corr, text_auto=True,
+        color_continuous_scale="RdBu_r",
+        zmin=-1, zmax=1, aspect="auto",
+        title="Correlation Matrix — EV Station Features",
+    )
+    fig.update_layout(height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-    # Reviews vs Usage
-    st.subheader("Reviews vs. Usage (scatter)")
-    fig = px.scatter(df, x="Reviews (Rating)",
-                     y="Usage Stats (avg users/day)",
-                     color="Charger Type" if "Charger Type" in df.columns else None,
-                     hover_data=["Station ID"] if "Station ID" in df.columns else None,
-                     opacity=0.7,
-                     title="Reviews (Rating) vs Average Daily Users")
+    with st.expander("📋 Key EDA Findings"):
+        dc_avg  = df[df["Charger Type"] == "DC Fast Charger"]["Usage Stats (avg users/day)"].mean()
+        ac1_avg = df[df["Charger Type"] == "AC Level 1"]["Usage Stats (avg users/day)"].mean()
+        ren_yes = df[df["Renewable Energy Source"] == "Yes"]["Usage Stats (avg users/day)"].mean()
+        ren_no  = df[df["Renewable Energy Source"] == "No"]["Usage Stats (avg users/day)"].mean()
+        st.markdown(f"""
+        - **DC Fast Chargers** average **{dc_avg:.1f}** users/day vs AC Level 1 at **{ac1_avg:.1f}** — a **{((dc_avg/ac1_avg)-1)*100:.0f}%** difference
+        - **Renewable stations** average **{ren_yes:.1f}** vs **{ren_no:.1f}** users/day for non-renewable
+        - **Usage grows** with installation year — newer stations attract more users
+        - **Charging Capacity** and **Renewable_Enc** show the strongest positive correlations with usage
+        - **Distance to City** is negatively correlated with demand — urban stations are busier
+        """)
+
+
+# ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 2 — CLUSTERING                                        ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_cluster:
+    st.markdown('<div class="section-title">K-Means Clustering Analysis</div>',
+                unsafe_allow_html=True)
+
+    ks, inertias, sils = elbow_data(df)
+    best_k_sil = ks[int(np.argmax(sils))]
+
+    fig_elbow = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Elbow Method (Inertia)", "Silhouette Score"),
+    )
+    fig_elbow.add_trace(
+        go.Scatter(x=ks, y=inertias, mode="lines+markers",
+                   marker=dict(color="#1565C0", size=8),
+                   line=dict(color="#1565C0", width=2), name="Inertia"),
+        row=1, col=1,
+    )
+    fig_elbow.add_trace(
+        go.Scatter(x=ks, y=sils, mode="lines+markers",
+                   marker=dict(color="#E53935", size=8),
+                   line=dict(color="#E53935", width=2), name="Silhouette"),
+        row=1, col=2,
+    )
+    fig_elbow.add_vline(x=best_k_sil, line_dash="dot",
+                        line_color="green", row=1, col=2)
+    fig_elbow.update_layout(
+        title=f"Optimal K = {best_k_sil} (highest silhouette score). "
+              f"Selected K = {n_clusters}",
+        showlegend=False, height=350,
+    )
+    st.plotly_chart(fig_elbow, use_container_width=True)
+
+    cluster_labels, sil_score = run_kmeans(df, n_clusters)
+    df_c = df.copy()
+    df_c["Cluster"] = cluster_labels.astype(str)
+
+    st.info(f"**Silhouette Score for K={n_clusters}: {sil_score:.3f}** "
+            f"(closer to 1.0 = better-defined clusters)")
+
+    # Profile
+    profile = (
+        df_c.groupby("Cluster").agg(
+            Count=("Station ID", "count"),
+            Avg_Users=("Usage Stats (avg users/day)", "mean"),
+            Avg_Capacity=("Charging Capacity (kW)", "mean"),
+            Avg_Cost=("Cost (USD/kWh)", "mean"),
+            Avg_Distance=("Distance to City (km)", "mean"),
+            Avg_Rating=("Reviews (Rating)", "mean"),
+        ).round(2).reset_index()
+    )
+
+    def auto_label(row):
+        if row["Avg_Users"] >= df_c["Usage Stats (avg users/day)"].quantile(0.75):
+            return "🔴 High-Demand Urban Hub"
+        elif row["Avg_Distance"] >= df_c["Distance to City (km)"].quantile(0.75):
+            return "🔵 Remote Low-Traffic Station"
+        elif row["Avg_Cost"] <= df_c["Cost (USD/kWh)"].quantile(0.30):
+            return "🟢 Budget Commuter Station"
+        else:
+            return "🟡 Moderate Mixed-Use Station"
+
+    profile["Label"] = profile.apply(auto_label, axis=1)
+    df_c["Cluster_Label"] = df_c["Cluster"].map(
+        profile.set_index("Cluster")["Label"])
+
+    st.markdown("#### Cluster Profiles")
+    st.dataframe(
+        profile.rename(columns={
+            "Count": "Stations", "Avg_Users": "Avg Users/Day",
+            "Avg_Capacity": "Avg kW", "Avg_Cost": "Avg $/kWh",
+            "Avg_Distance": "Avg Distance km", "Avg_Rating": "Avg Rating",
+        }),
+        use_container_width=True, hide_index=True,
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        fig = px.scatter(
+            df_c.sample(min(2000, len(df_c)), random_state=1),
+            x="Usage Stats (avg users/day)",
+            y="Charging Capacity (kW)",
+            color="Cluster_Label",
+            color_discrete_sequence=px.colors.qualitative.Bold,
+            opacity=0.7,
+            title="Clusters: Avg Users vs Charging Capacity",
+            hover_data={"Station ID": True, "Station Operator": True,
+                        "Charger Type": True},
+        )
+        fig.update_layout(legend=dict(orientation="h", y=-0.35, font_size=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+    with c2:
+        fig = px.scatter(
+            df_c.sample(min(2000, len(df_c)), random_state=2),
+            x="Distance to City (km)",
+            y="Cost (USD/kWh)",
+            color="Cluster_Label",
+            color_discrete_sequence=px.colors.qualitative.Bold,
+            opacity=0.7,
+            title="Clusters: Distance to City vs Cost",
+            hover_data={"Station ID": True, "Charger Type": True},
+        )
+        fig.update_layout(legend=dict(orientation="h", y=-0.35, font_size=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+    comp = (df_c.groupby(["Cluster_Label", "Charger Type"])
+                .size().reset_index(name="Count"))
+    fig = px.bar(
+        comp, x="Cluster_Label", y="Count",
+        color="Charger Type",
+        color_discrete_map={"AC Level 1": "#64B5F6",
+                             "AC Level 2": "#1E88E5",
+                             "DC Fast Charger": "#0D47A1"},
+        barmode="stack",
+        title="Charger Type Composition Within Each Cluster",
+    )
+    fig.update_layout(xaxis_title="", legend=dict(orientation="h", y=-0.2))
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ════════════════════════════════════════════════════════════════
-# TAB 2 — CLUSTERING
-# ════════════════════════════════════════════════════════════════
-with tabs[1]:
-    st.subheader("K-Means Clustering Analysis")
+# ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 3 — ASSOCIATION RULE MINING                          ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_arm:
+    st.markdown('<div class="section-title">Association Rule Mining — Apriori Algorithm</div>',
+                unsafe_allow_html=True)
+    st.caption(f"Min Support: **{arm_sup:.2f}** | Min Confidence: **{arm_conf:.2f}** "
+               "(adjust in sidebar)")
 
-    feat_cols = [c + "_sc" for c in
-                 ["Usage Stats (avg users/day)", "Charging Capacity (kW)",
-                  "Cost (USD/kWh)", "Distance to City (km)"]
-                 if c + "_sc" in df.columns]
+    rules, n_freq = run_arm(df, arm_sup, arm_conf)
 
-    if feat_cols and len(df) >= n_clusters:
-        X = df[feat_cols].fillna(0)
-        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        df["Cluster"] = km.fit_predict(X).astype(str)
+    if len(rules) == 0:
+        st.warning("No rules found. Lower Support or Confidence in the sidebar.")
+    else:
+        st.success(f"✅ Found **{len(rules):,}** association rules from "
+                   f"**{n_freq:,}** frequent itemsets")
 
-        # Elbow chart
-        inertias = []
-        for k in range(2, 10):
-            inertias.append(KMeans(n_clusters=k, random_state=42,
-                                   n_init=10).fit(X).inertia_)
-        fig_elbow = px.line(x=range(2,10), y=inertias,
-                            markers=True,
-                            labels={"x":"K","y":"Inertia"},
-                            title="Elbow Method — Optimal K",
-                            color_discrete_sequence=["#e53935"])
-        st.plotly_chart(fig_elbow, use_container_width=True)
+        rules_disp = rules.copy()
+        rules_disp["Antecedent"] = rules_disp["antecedents"].apply(
+            lambda x: " + ".join(sorted(x)))
+        rules_disp["Consequent"] = rules_disp["consequents"].apply(
+            lambda x: " + ".join(sorted(x)))
+        rules_disp = rules_disp[["Antecedent", "Consequent",
+                                   "support", "confidence", "lift"]].round(3)
+        rules_disp.columns = ["Antecedent (IF)", "Consequent (THEN)",
+                               "Support", "Confidence", "Lift"]
+
+        st.markdown("#### Top Rules by Lift")
+        st.dataframe(rules_disp.head(20), use_container_width=True,
+                     hide_index=True)
 
         c1, c2 = st.columns(2)
         with c1:
-            fig = px.scatter(df,
-                             x="Usage Stats (avg users/day)",
-                             y="Charging Capacity (kW)",
-                             color="Cluster",
-                             title="Clusters: Usage vs Capacity",
-                             color_discrete_sequence=px.colors.qualitative.Bold,
-                             opacity=0.8)
+            top10 = rules_disp.head(10).copy()
+            top10["Rule"] = (top10["Antecedent (IF)"].str[:30] + " → " +
+                             top10["Consequent (THEN)"].str[:20])
+            fig = px.bar(
+                top10.iloc[::-1], y="Rule", x="Lift",
+                orientation="h",
+                color="Lift", color_continuous_scale="Viridis",
+                title="Top 10 Rules by Lift", text_auto=".2f",
+            )
+            fig.update_layout(height=420, yaxis_title="")
             st.plotly_chart(fig, use_container_width=True)
+
         with c2:
-            fig = px.scatter(df,
-                             x="Distance to City (km)",
-                             y="Cost (USD/kWh)",
-                             color="Cluster",
-                             title="Clusters: Distance vs Cost",
-                             color_discrete_sequence=px.colors.qualitative.Bold,
-                             opacity=0.8)
+            fig = px.scatter(
+                rules_disp, x="Support", y="Confidence",
+                size="Lift", color="Lift",
+                color_continuous_scale="Plasma",
+                hover_data=["Antecedent (IF)", "Consequent (THEN)"],
+                title="Support vs Confidence (size & colour = Lift)",
+                opacity=0.7,
+            )
             st.plotly_chart(fig, use_container_width=True)
 
-        # Cluster profile table
-        st.subheader("Cluster Profiles")
-        profile_cols = ["Usage Stats (avg users/day)", "Charging Capacity (kW)",
-                        "Cost (USD/kWh)", "Distance to City (km)",
-                        "Reviews (Rating)"]
-        existing_p = [c for c in profile_cols if c in df.columns]
-        profile = df.groupby("Cluster")[existing_p].mean().round(2)
-        profile.columns = [c.replace(" (avg users/day)","")
-                           .replace(" (USD/kWh)","")
-                           .replace(" (kW)","")
-                           .replace(" to City (km)","")
-                           for c in profile.columns]
-        st.dataframe(profile, use_container_width=True)
-    else:
-        st.warning("Not enough data for clustering with selected filters.")
+        st.markdown("#### 🔑 Top Rules Interpretation")
+        for _, row in rules.head(5).iterrows():
+            ant = " + ".join(sorted(row["antecedents"]))
+            con = " + ".join(sorted(row["consequents"]))
+            st.markdown(
+                f'<div class="insight-box">'
+                f'<b>IF</b> {ant} <b>→ THEN</b> {con}<br>'
+                f'Support: {row["support"]:.3f} | '
+                f'Confidence: {row["confidence"]:.3f} | '
+                f'<b>Lift: {row["lift"]:.3f}</b>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
 
-# ════════════════════════════════════════════════════════════════
-# TAB 3 — ASSOCIATION RULES
-# ════════════════════════════════════════════════════════════════
-with tabs[2]:
-    st.subheader("Association Rule Mining")
-    min_sup = st.slider("Min Support", 0.05, 0.40, 0.15, 0.01)
-    min_conf = st.slider("Min Confidence", 0.30, 0.90, 0.50, 0.05)
+# ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 4 — ANOMALY DETECTION                                ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_anom:
+    st.markdown('<div class="section-title">Anomaly Detection — Multi-Method Consensus</div>',
+                unsafe_allow_html=True)
+    st.caption(f"Isolation Forest contamination: **{contamination*100:.0f}%** "
+               "(adjust in sidebar)")
 
-    df["Usage_Lev"] = pd.cut(df["Usage Stats (avg users/day)"],
-                              bins=3,
-                              labels=["Low_Usage","Med_Usage","High_Usage"])
-    df["Cost_Lev"]  = pd.cut(df["Cost (USD/kWh)"],
-                              bins=3,
-                              labels=["Low_Cost","Med_Cost","High_Cost"])
-    df["Cap_Lev"]   = pd.cut(df["Charging Capacity (kW)"],
-                              bins=3,
-                              labels=["Low_Cap","Med_Cap","High_Cap"])
-    df["Dist_Lev"]  = pd.cut(df["Distance to City (km)"],
-                              bins=3,
-                              labels=["Near_City","Mid_Dist","Far_Rural"])
+    df_a = detect_anomalies(df, contamination)
 
-    basket_c = ["Charger Type","Usage_Lev","Cost_Lev","Cap_Lev",
-                "Dist_Lev","Renewable Energy Source"]
-    basket_c = [c for c in basket_c if c in df.columns]
-    transactions = df[basket_c].astype(str).values.tolist()
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("🚨 Consensus Anomalies", int(df_a["Anomaly"].sum()))
+    a2.metric("📐 Z-Score Outliers",    int(df_a["Anom_Z"].sum()))
+    a3.metric("📦 IQR Outliers",        int(df_a["Anom_IQR"].sum()))
+    a4.metric("🤖 Isolation Forest",    int(df_a["Anom_IF"].sum()))
 
-    te  = TransactionEncoder()
-    arr = te.fit_transform(transactions)
-    bdf = pd.DataFrame(arr, columns=te.columns_)
+    st.markdown("**Consensus rule:** Flagged as anomaly if ≥ 2 of 3 methods agree.")
 
-    try:
-        freq = apriori(bdf, min_support=min_sup,
-                       use_colnames=True, verbose=0)
-        rules = association_rules(freq, metric="confidence",
-                                  min_threshold=min_conf)
-        rules = rules.sort_values("lift", ascending=False)
-
-        st.success(f"✅ Found **{len(rules)}** rules from "
-                   f"**{len(freq)}** frequent itemsets")
-
-        # Display rules table
-        rules_disp = rules.copy()
-        rules_disp["antecedents"] = rules_disp["antecedents"].apply(
-            lambda x: ", ".join(list(x)))
-        rules_disp["consequents"] = rules_disp["consequents"].apply(
-            lambda x: ", ".join(list(x)))
-        st.dataframe(
-            rules_disp[["antecedents","consequents",
-                         "support","confidence","lift"]]
-            .round(3).head(20),
-            use_container_width=True)
-
-        # Scatter: support vs confidence
-        fig = px.scatter(rules_disp.head(50),
-                         x="support", y="confidence",
-                         size="lift", color="lift",
-                         hover_data=["antecedents","consequents"],
-                         color_continuous_scale="Viridis",
-                         title="Association Rules — Support vs Confidence (size=Lift)")
-        st.plotly_chart(fig, use_container_width=True)
-
-    except Exception as e:
-        st.error(f"ARM failed: {e}. Try lowering min support.")
-
-
-# ════════════════════════════════════════════════════════════════
-# TAB 4 — ANOMALY DETECTION
-# ════════════════════════════════════════════════════════════════
-with tabs[3]:
-    st.subheader("Anomaly Detection")
-    contamination = st.slider("Isolation Forest Contamination", 0.01, 0.20,
-                              0.05, 0.01)
-
-    target = "Usage Stats (avg users/day)"
-    df["Z_Score"] = np.abs(stats.zscore(df[target].fillna(0)))
-    Q1, Q3 = df[target].quantile(0.25), df[target].quantile(0.75)
-    IQR = Q3 - Q1
-    df["Anomaly_IQR"] = (
-        (df[target] < Q1 - 1.5*IQR) | (df[target] > Q3 + 1.5*IQR)
-    ).astype(int)
-    df["Anomaly_ZScore"] = (df["Z_Score"] > 3).astype(int)
-
-    iso_f = [c for c in ["Usage Stats (avg users/day)", "Cost (USD/kWh)",
-                          "Charging Capacity (kW)", "Reviews (Rating)",
-                          "Maint_Enc"] if c in df.columns]
-    X_iso = df[iso_f].fillna(df[iso_f].median())
-    iso = IsolationForest(contamination=contamination, random_state=42)
-    df["Anomaly_IF"] = (iso.fit_predict(X_iso) == -1).astype(int)
-    df["Anomaly_Score"] = (df["Anomaly_ZScore"] + df["Anomaly_IQR"]
-                           + df["Anomaly_IF"])
-    df["Anomaly"] = (df["Anomaly_Score"] >= 2).astype(int)
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🚨 Anomalies (Consensus)", int(df["Anomaly"].sum()))
-    col2.metric("📐 Z-Score Outliers", int(df["Anomaly_ZScore"].sum()))
-    col3.metric("📦 IQR Outliers", int(df["Anomaly_IQR"].sum()))
-
-    fig = px.scatter(df,
-                     x=df.index, y=target,
-                     color=df["Anomaly"].map({0:"Normal",1:"Anomaly"}),
-                     color_discrete_map={"Normal":"#42a5f5","Anomaly":"#e53935"},
-                     opacity=0.75,
-                     title="Anomaly Detection — Station Usage Stats",
-                     labels={"x":"Station Index",target:target})
+    df_plot = df_a.copy()
+    df_plot["Status"] = df_plot["Anomaly"].map({0: "Normal", 1: "Anomaly"})
+    fig = px.scatter(
+        df_plot, x=df_plot.index,
+        y="Usage Stats (avg users/day)",
+        color="Status",
+        color_discrete_map={"Normal": "#42A5F5", "Anomaly": "#E53935"},
+        symbol="Status",
+        symbol_map={"Normal": "circle", "Anomaly": "x"},
+        opacity=0.7, size_max=7,
+        title="Usage Stats — Normal vs Anomalous Stations",
+        labels={"x": "Station Index",
+                "Usage Stats (avg users/day)": "Avg Users/Day"},
+        hover_data={"Station ID": True, "Charger Type": True,
+                    "Station Operator": True},
+    )
+    fig.update_layout(legend=dict(orientation="h", y=-0.2))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Cost vs Rating anomaly
-    df["CR_Anomaly"] = (
-        (df["Cost (USD/kWh)"] > df["Cost (USD/kWh)"].quantile(0.85)) &
-        (df["Reviews (Rating)"] < df["Reviews (Rating)"].quantile(0.15))
-    ).astype(int)
+    c1, c2 = st.columns(2)
+    with c1:
+        df_plot2 = df_a.copy()
+        df_plot2["CR_Status"] = df_plot2["HiCost_LowRating"].map(
+            {0: "Normal", 1: "High-Cost / Low-Rating"})
+        fig2 = px.scatter(
+            df_plot2.sample(min(2000, len(df_plot2)), random_state=5),
+            x="Cost (USD/kWh)", y="Reviews (Rating)",
+            color="CR_Status",
+            color_discrete_map={"Normal": "#42A5F5",
+                                 "High-Cost / Low-Rating": "#E53935"},
+            opacity=0.7,
+            title="High-Cost / Low-Rating Anomaly Stations",
+            hover_data={"Station ID": True, "Station Operator": True},
+        )
+        fig2.update_layout(legend=dict(orientation="h", y=-0.25))
+        st.plotly_chart(fig2, use_container_width=True)
 
-    fig2 = px.scatter(df, x="Cost (USD/kWh)", y="Reviews (Rating)",
-                      color=df["CR_Anomaly"].map({0:"Normal",1:"High Cost / Low Rating"}),
-                      color_discrete_map={"Normal":"#42a5f5",
-                                          "High Cost / Low Rating":"#e53935"},
-                      title="High-Cost / Low-Rating Stations",
-                      opacity=0.7)
-    st.plotly_chart(fig2, use_container_width=True)
+    with c2:
+        anom_ct = (df_a[df_a["Anomaly"] == 1]
+                   .groupby("Charger Type").size().reset_index(name="Anomaly Count"))
+        tot_ct  = (df_a.groupby("Charger Type").size().reset_index(name="Total"))
+        merged  = anom_ct.merge(tot_ct, on="Charger Type")
+        merged["Anomaly Rate %"] = (merged["Anomaly Count"] / merged["Total"] * 100).round(2)
+        fig3 = px.bar(
+            merged, x="Charger Type", y="Anomaly Rate %",
+            color="Charger Type",
+            color_discrete_map={"AC Level 1": "#64B5F6",
+                                 "AC Level 2": "#1E88E5",
+                                 "DC Fast Charger": "#0D47A1"},
+            text_auto=".1f",
+            title="Anomaly Rate (%) by Charger Type",
+        )
+        fig3.update_layout(showlegend=False)
+        st.plotly_chart(fig3, use_container_width=True)
 
-    # Anomaly table
-    st.subheader("Anomalous Stations Detail")
-    anom_cols = [c for c in ["Station ID", target, "Cost (USD/kWh)",
-                              "Reviews (Rating)", "Charger Type",
-                              "Station Operator", "Anomaly_Score"]
-                 if c in df.columns]
-    anom_df = df[df["Anomaly"]==1][anom_cols].sort_values(
-        "Anomaly_Score", ascending=False)
-    st.dataframe(anom_df, use_container_width=True)
+    st.markdown("#### 🔍 Anomalous Station Details")
+    anom_detail = df_a[df_a["Anomaly"] == 1][[
+        "Station ID", "Usage Stats (avg users/day)", "Cost (USD/kWh)",
+        "Reviews (Rating)", "Charger Type", "Station Operator",
+        "Distance to City (km)", "Renewable Energy Source", "Anom_Score"
+    ]].sort_values("Anom_Score", ascending=False).reset_index(drop=True)
+    st.dataframe(anom_detail, use_container_width=True, hide_index=True)
+    st.caption(f"{len(anom_detail)} anomalous stations | "
+               "Anom_Score = number of methods that flagged the station (max 3)")
 
 
-# ════════════════════════════════════════════════════════════════
-# TAB 5 — GEO MAP
-# ════════════════════════════════════════════════════════════════
-with tabs[4]:
-    st.subheader("Geographic Distribution of Stations")
-    if "Latitude" in df.columns and "Longitude" in df.columns:
-        map_df = df.dropna(subset=["Latitude","Longitude"]).copy()
+# ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 5 — GEO MAP                                          ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_map:
+    st.markdown('<div class="section-title">Geographic Distribution of EV Charging Stations</div>',
+                unsafe_allow_html=True)
+
+    map_mode = st.radio(
+        "Map Mode",
+        ["Station Clusters", "Usage Heatmap", "Charger Type", "Anomalies"],
+        horizontal=True,
+    )
+    sample_n = min(3000, len(df))
+    df_map = df.sample(sample_n, random_state=42).copy()
+
+    if map_mode == "Station Clusters":
+        cl_labels, _ = run_kmeans(df, n_clusters)
+        df_cl = df.copy()
+        df_cl["Cluster"] = cl_labels.astype(str)
+        df_map2 = df_cl.sample(sample_n, random_state=42)
         fig_map = px.scatter_mapbox(
-            map_df,
-            lat="Latitude", lon="Longitude",
-            color="Cluster" if "Cluster" in map_df.columns else "Charger Type",
-            size="Usage Stats (avg users/day)",
-            hover_name="Station ID" if "Station ID" in map_df.columns else None,
-            hover_data={"Latitude":False,"Longitude":False,
-                        "Usage Stats (avg users/day)":True,
-                        "Charger Type":True,
-                        "Reviews (Rating)":True},
-            zoom=2, height=550,
+            df_map2, lat="Latitude", lon="Longitude",
+            color="Cluster",
+            color_discrete_sequence=px.colors.qualitative.Bold,
+            size="Usage Stats (avg users/day)", size_max=14,
+            zoom=1, height=600,
+            hover_name="Station ID",
+            hover_data={"Latitude": False, "Longitude": False,
+                        "Charger Type": True,
+                        "Usage Stats (avg users/day)": True,
+                        "Station Operator": True,
+                        "Reviews (Rating)": True},
             mapbox_style="open-street-map",
-            title="EV Charging Stations — Clustered by Usage & Type"
+            title=f"Stations Coloured by K-Means Cluster (K={n_clusters})",
         )
-        st.plotly_chart(fig_map, use_container_width=True)
 
-        # Heatmap layer
-        st.subheader("Usage Demand Heatmap")
-        heat_data = (map_df[["Latitude","Longitude",
-                              "Usage Stats (avg users/day)"]]
-                     .rename(columns={"Latitude":"lat","Longitude":"lon",
-                                      "Usage Stats (avg users/day)":"weight"}))
-        fig_heat = px.density_mapbox(
-            heat_data, lat="lat", lon="lon", z="weight",
-            radius=20, zoom=2, height=500,
-            mapbox_style="stamen-terrain",
+    elif map_mode == "Usage Heatmap":
+        fig_map = px.density_mapbox(
+            df_map, lat="Latitude", lon="Longitude",
+            z="Usage Stats (avg users/day)",
+            radius=18, zoom=1, height=600,
             color_continuous_scale="YlOrRd",
-            title="Demand Heatmap — Avg Users/Day"
+            mapbox_style="carto-positron",
+            title="Demand Heatmap — Avg Daily Users",
         )
-        st.plotly_chart(fig_heat, use_container_width=True)
-    else:
-        st.info("No Latitude/Longitude columns found in dataset.")
+
+    elif map_mode == "Charger Type":
+        fig_map = px.scatter_mapbox(
+            df_map, lat="Latitude", lon="Longitude",
+            color="Charger Type",
+            color_discrete_map={"AC Level 1": "#64B5F6",
+                                 "AC Level 2": "#1E88E5",
+                                 "DC Fast Charger": "#0D47A1"},
+            size="Usage Stats (avg users/day)", size_max=12,
+            zoom=1, height=600,
+            hover_name="Station ID",
+            hover_data={"Latitude": False, "Longitude": False,
+                        "Station Operator": True,
+                        "Charging Capacity (kW)": True},
+            mapbox_style="open-street-map",
+            title="Station Map Coloured by Charger Type",
+        )
+
+    else:  # Anomalies
+        df_a2 = detect_anomalies(df, contamination)
+        df_map3 = df_a2.sample(sample_n, random_state=42).copy()
+        df_map3["Status"] = df_map3["Anomaly"].map({0: "Normal", 1: "Anomaly"})
+        fig_map = px.scatter_mapbox(
+            df_map3, lat="Latitude", lon="Longitude",
+            color="Status",
+            color_discrete_map={"Normal": "#42A5F5", "Anomaly": "#E53935"},
+            size="Usage Stats (avg users/day)", size_max=14,
+            zoom=1, height=600,
+            hover_name="Station ID",
+            hover_data={"Latitude": False, "Longitude": False,
+                        "Usage Stats (avg users/day)": True,
+                        "Cost (USD/kWh)": True,
+                        "Reviews (Rating)": True},
+            mapbox_style="open-street-map",
+            title="Anomalous Stations Highlighted on Map",
+        )
+
+    fig_map.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+    st.plotly_chart(fig_map, use_container_width=True)
+
+    st.markdown("#### Station Performance: Operator × Charger Type")
+    pivot_op = df.pivot_table(
+        values="Usage Stats (avg users/day)",
+        index="Station Operator",
+        columns="Charger Type",
+        aggfunc="mean",
+    ).round(1)
+    fig_pivot = px.imshow(
+        pivot_op, text_auto=True, color_continuous_scale="Blues",
+        title="Avg Users/Day: Operator × Charger Type", aspect="auto",
+    )
+    st.plotly_chart(fig_pivot, use_container_width=True)
 
 
-# ════════════════════════════════════════════════════════════════
-# TAB 6 — INSIGHTS
-# ════════════════════════════════════════════════════════════════
-with tabs[5]:
-    st.subheader("📋 Key Insights & Recommendations")
+# ╔═══════════════════════════════════════════════════════════╗
+# ║  TAB 6 — INSIGHTS & RECOMMENDATIONS                       ║
+# ╚═══════════════════════════════════════════════════════════╝
+with tab_insights:
+    st.markdown('<div class="section-title">Key Insights & Strategic Recommendations</div>',
+                unsafe_allow_html=True)
 
-    if "Charger Type" in df.columns:
-        top_charger = (df.groupby("Charger Type")
-                         ["Usage Stats (avg users/day)"]
-                         .mean().idxmax())
-        top_val = (df.groupby("Charger Type")
-                     ["Usage Stats (avg users/day)"]
-                     .mean().max())
-        st.success(f"⚡ **Most Popular Charger:** {top_charger} "
-                   f"({top_val:.1f} avg users/day)")
+    # Compute live stats
+    dc_avg   = df[df["Charger Type"] == "DC Fast Charger"]["Usage Stats (avg users/day)"].mean()
+    ac1_avg  = df[df["Charger Type"] == "AC Level 1"]["Usage Stats (avg users/day)"].mean()
+    ren_yes  = df[df["Renewable Energy Source"] == "Yes"]["Usage Stats (avg users/day)"].mean()
+    ren_no   = df[df["Renewable Energy Source"] == "No"]["Usage Stats (avg users/day)"].mean()
+    ren_r_y  = df[df["Renewable Energy Source"] == "Yes"]["Reviews (Rating)"].mean()
+    ren_r_n  = df[df["Renewable Energy Source"] == "No"]["Reviews (Rating)"].mean()
+    med_dist = df["Distance to City (km)"].median()
+    city_avg = df[df["Distance to City (km)"] <= med_dist]["Usage Stats (avg users/day)"].mean()
+    rural_avg= df[df["Distance to City (km)"] >  med_dist]["Usage Stats (avg users/day)"].mean()
+    best_op  = df.groupby("Station Operator")["Reviews (Rating)"].mean().idxmax()
+    best_op_r= df.groupby("Station Operator")["Reviews (Rating)"].mean().max()
+    df_a_ins = detect_anomalies(df, contamination)
+    n_anom   = int(df_a_ins["Anomaly"].sum())
+    n_cr     = int(df_a_ins["HiCost_LowRating"].sum())
 
-    if "Station Operator" in df.columns:
-        best_op = (df.groupby("Station Operator")["Reviews (Rating)"]
-                     .mean().idxmax())
-        st.info(f"🏆 **Best-Rated Operator:** {best_op} "
-                f"(avg rating: "
-                f"{df.groupby('Station Operator')['Reviews (Rating)'].mean().max():.2f})")
+    # Findings
+    st.markdown("### 📊 Analytical Findings")
+    f1, f2 = st.columns(2)
+    with f1:
+        st.markdown(
+            f'<div class="insight-box"><b>⚡ Charger Type Impact</b><br>'
+            f'DC Fast Chargers attract <b>{dc_avg:.1f}</b> avg users/day vs '
+            f'AC Level 1 at <b>{ac1_avg:.1f}</b> — '
+            f'<b>{((dc_avg/ac1_avg)-1)*100:.0f}% more demand</b>.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="insight-box"><b>🏙️ Urban vs Rural Demand</b><br>'
+            f'City stations (≤{med_dist:.0f} km) average <b>{city_avg:.1f}</b> '
+            f'users/day vs rural at <b>{rural_avg:.1f}</b> — '
+            f'<b>{((city_avg/rural_avg)-1)*100:.0f}% gap</b>.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="green-box"><b>🌿 Renewable Energy Advantage</b><br>'
+            f'Renewable stations earn avg rating <b>{ren_r_y:.2f}</b> vs '
+            f'<b>{ren_r_n:.2f}</b>, and attract <b>{ren_yes:.1f}</b> vs '
+            f'<b>{ren_no:.1f}</b> users/day.</div>',
+            unsafe_allow_html=True)
 
-    if "Distance to City (km)" in df.columns:
-        med = df["Distance to City (km)"].median()
-        city_avg = df[df["Distance to City (km)"]<=med]["Usage Stats (avg users/day)"].mean()
-        rural_avg = df[df["Distance to City (km)"]>med]["Usage Stats (avg users/day)"].mean()
-        st.warning(f"🏙️ City stations avg **{city_avg:.1f}** users/day vs "
-                   f"rural **{rural_avg:.1f}** users/day")
+    with f2:
+        st.markdown(
+            f'<div class="green-box"><b>🏆 Best-Rated Operator</b><br>'
+            f'<b>{best_op}</b> leads in customer satisfaction with avg rating '
+            f'<b>{best_op_r:.2f}/5</b>.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="danger-box"><b>🚨 Anomalies Detected</b><br>'
+            f'<b>{n_anom}</b> stations flagged by consensus. '
+            f'<b>{n_cr}</b> have high cost + low rating — highest business risk.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="warn-box"><b>📈 Installation Year Trend</b><br>'
+            f'Stations built from 2019 onward show higher usage. '
+            f'Pre-2015 AC Level 1 stations are underperforming candidates '
+            f'for upgrade or decommission.</div>',
+            unsafe_allow_html=True)
 
-    if "Anomaly" in df.columns:
-        n_a = df["Anomaly"].sum()
-        st.error(f"🚨 **{n_a}** anomalous stations detected — "
-                 f"recommend operational audit")
+    # Summary chart
+    st.markdown("### 📈 Charger Type Performance Summary")
+    summary = df.groupby("Charger Type", as_index=False).agg(
+        Avg_Users=("Usage Stats (avg users/day)", "mean"),
+        Avg_Rating=("Reviews (Rating)", "mean"),
+        Avg_Cost=("Cost (USD/kWh)", "mean"),
+    ).round(2)
 
-    if "Renewable Energy Source" in df.columns:
-        ren = df.groupby("Renewable Energy Source")[
-            "Usage Stats (avg users/day)"].mean()
-        st.success(f"🌿 Renewable stations: "
-                   f"{'Yes' in ren.index and f'{ren.get(\"Yes\",0):.1f}' or 'N/A'} "
-                   f"avg users/day vs non-renewable: "
-                   f"{'No' in ren.index and f'{ren.get(\"No\",0):.1f}' or 'N/A'}")
+    fig_sum = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=("Avg Users/Day", "Avg Rating", "Avg Cost $/kWh"),
+    )
+    colors_map = {"AC Level 1": "#64B5F6", "AC Level 2": "#1E88E5",
+                  "DC Fast Charger": "#0D47A1"}
+    for i, row_s in summary.iterrows():
+        c = colors_map[row_s["Charger Type"]]
+        fig_sum.add_trace(go.Bar(name=row_s["Charger Type"],
+                                  x=[row_s["Charger Type"]],
+                                  y=[row_s["Avg_Users"]],
+                                  marker_color=c, showlegend=(i == 0)), row=1, col=1)
+        fig_sum.add_trace(go.Bar(name=row_s["Charger Type"],
+                                  x=[row_s["Charger Type"]],
+                                  y=[row_s["Avg_Rating"]],
+                                  marker_color=c, showlegend=False), row=1, col=2)
+        fig_sum.add_trace(go.Bar(name=row_s["Charger Type"],
+                                  x=[row_s["Charger Type"]],
+                                  y=[row_s["Avg_Cost"]],
+                                  marker_color=c, showlegend=False), row=1, col=3)
+    fig_sum.update_layout(height=320, showlegend=True,
+                           legend=dict(orientation="h", y=-0.25))
+    st.plotly_chart(fig_sum, use_container_width=True)
 
-    st.markdown("---")
-    st.subheader("Strategic Recommendations")
-    recommendations = [
-        ("Expand DC Fast Charger infrastructure near city centres",
-         "High-demand urban hubs are underserved"),
-        ("Audit high-cost, low-rated stations identified as anomalies",
-         "These stations are losing customers and revenue"),
-        ("Prioritise renewable-powered stations in marketing",
-         "Higher user preference & sustainability alignment"),
-        ("Schedule preventive maintenance for frequently serviced stations",
-         "Reduce unexpected downtime and improve reliability"),
-        ("Deploy additional stations in high-demand clusters",
-         "Cluster analysis reveals unmet demand hotspots"),
+    # Recommendations
+    st.markdown("### 💡 Strategic Recommendations")
+    recs = [
+        ("Expand DC Fast Charger Network in Urban Areas",
+         f"DC Fast Chargers generate {dc_avg:.1f} avg users/day — the highest of all charger types. "
+         "Prioritise installation within 20 km of city centres where usage-capacity "
+         "correlation is strongest.",
+         "insight-box"),
+        ("Audit High-Cost / Low-Rating Stations",
+         f"{n_cr} stations have above-P85 cost AND below-P15 rating. These are losing "
+         "customers and damaging brand perception. Immediate pricing review and service "
+         "quality audit recommended.",
+         "danger-box"),
+        ("Accelerate Renewable Energy Integration",
+         f"Renewable stations earn {ren_r_y:.2f} avg rating vs {ren_r_n:.2f} and attract "
+         f"{ren_yes:.1f} vs {ren_no:.1f} users/day. Transitioning to renewables aligns "
+         "commercial and sustainability goals simultaneously.",
+         "green-box"),
+        ("Upgrade or Decommission Remote AC Level 1 Stations",
+         f"AC Level 1 averages only {ac1_avg:.1f} users/day. Remote low-traffic stations "
+         "deliver the poorest ROI. Upgrading to AC Level 2 or relocating to higher-demand "
+         "urban zones will improve asset utilisation.",
+         "warn-box"),
+        ("Implement Cluster-Based Dynamic Pricing",
+         "High-Demand Urban Hubs (from clustering) can support premium pricing during "
+         "peak hours. Budget Commuter Stations benefit from stable lower rates. "
+         "Real-time availability-linked pricing would further optimise revenue.",
+         "insight-box"),
+        ("Preventive Maintenance for Anomalous Stations",
+         f"{n_anom} consensus-flagged stations likely have underlying hardware issues. "
+         "Shifting from reactive to scheduled preventive maintenance reduces downtime "
+         "and improves customer satisfaction scores.",
+         "warn-box"),
     ]
-    for i, (rec, rationale) in enumerate(recommendations, 1):
-        with st.expander(f"💡 Recommendation {i}: {rec}"):
-            st.write(f"**Rationale:** {rationale}")
 
-    st.markdown("---")
-    st.caption("SmartEnergy Data Lab | Data Mining Summative Assessment "
-               "| Scenario 2: SmartCharging Analytics")
+    for title, body, box_class in recs:
+        with st.expander(f"💡 {title}"):
+            st.markdown(f'<div class="{box_class}">{body}</div>',
+                        unsafe_allow_html=True)
+
+    st.divider()
+    st.markdown(
+        "<p style='text-align:center;color:#888;font-size:0.82rem'>"
+        "SmartEnergy Data Lab | Data Mining Summative Assessment | "
+        "Scenario 2: SmartCharging Analytics — Uncovering EV Behaviour Patterns"
+        "</p>",
+        unsafe_allow_html=True,
+    )
