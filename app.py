@@ -19,8 +19,15 @@ from sklearn.metrics import silhouette_score
 from scipy import stats
 from mlxtend.frequent_patterns import apriori, association_rules
 from mlxtend.preprocessing import TransactionEncoder
+import requests, io
 import warnings
 warnings.filterwarnings("ignore")
+
+# ─────────────────────────────────────────────────────────────
+# GOOGLE DRIVE DATASET CONFIG
+# ─────────────────────────────────────────────────────────────
+GDRIVE_FILE_ID  = "1F-r0PLBFiuOu6Gq2KFGJrd_EXe3R16gG"
+GDRIVE_DOWNLOAD = f"https://drive.google.com/uc?export=download&id={GDRIVE_FILE_ID}"
 
 # ─────────────────────────────────────────────────────────────
 # PAGE CONFIG
@@ -35,31 +42,33 @@ st.set_page_config(
 st.markdown("""
 <style>
 [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 700; }
-[data-testid="stMetricLabel"] { font-size: 0.78rem; color: #666; }
+[data-testid="stMetricLabel"] { font-size: 0.78rem; color: #888; }
 .section-title {
     font-size: 1.35rem; font-weight: 700; color: #1565C0;
     border-left: 4px solid #1565C0; padding-left: 10px;
     margin: 1rem 0 0.5rem 0;
 }
+/* Force all info boxes to always show dark text — fixes dark-mode fading */
+.insight-box, .warn-box, .danger-box, .green-box {
+    border-radius: 6px; padding: 0.8rem 1.1rem; margin: 0.5rem 0;
+    font-size: 0.93rem; color: #111111 !important;
+    line-height: 1.55;
+}
 .insight-box {
-    background: #E3F2FD; border-left: 4px solid #1565C0;
-    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
-    font-size: 0.93rem; color: #1C1C1C;
+    background: #DBEAFE !important; border-left: 4px solid #1565C0;
 }
 .warn-box {
-    background: #FFF8E1; border-left: 4px solid #F9A825;
-    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
-    font-size: 0.93rem;
+    background: #FEF9C3 !important; border-left: 4px solid #D97706;
 }
 .danger-box {
-    background: #FFEBEE; border-left: 4px solid #C62828;
-    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
-    font-size: 0.93rem;
+    background: #FFE4E6 !important; border-left: 4px solid #C62828;
 }
 .green-box {
-    background: #E8F5E9; border-left: 4px solid #2E7D32;
-    border-radius: 4px; padding: 0.75rem 1rem; margin: 0.5rem 0;
-    font-size: 0.93rem;
+    background: #DCFCE7 !important; border-left: 4px solid #2E7D32;
+}
+/* Ensure all child elements inside boxes are also dark */
+.insight-box *, .warn-box *, .danger-box *, .green-box * {
+    color: #111111 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -68,11 +77,14 @@ st.markdown("""
 # ─────────────────────────────────────────────────────────────
 # DATA LOADING & PREPROCESSING  (cached)
 # ─────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner="Loading & preprocessing data…")
-def load_and_prepare(file=None):
-    if file is not None:
-        df = pd.read_csv(file)
-    else:
+@st.cache_data(show_spinner="⚡ Fetching dataset from Google Drive…")
+def load_and_prepare():
+    try:
+        resp = requests.get(GDRIVE_DOWNLOAD, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+    except Exception:
+        # Fallback: try local copy (for offline dev)
         df = pd.read_csv("detailed_ev_charging_stations.csv")
 
     # ── Deduplication ─────────────────────────────────────
@@ -242,11 +254,7 @@ with st.sidebar:
     st.caption("SmartEnergy Data Lab | EV Infrastructure Intelligence")
     st.divider()
 
-    uploaded = st.file_uploader("📂 Upload CSV Dataset", type=["csv"],
-                                 help="Upload detailed_ev_charging_stations.csv")
-    st.divider()
-
-    df_full = load_and_prepare(uploaded)
+    df_full = load_and_prepare()
 
     st.markdown("### 🔽 Global Filters")
     charger_opts = sorted(df_full["Charger Type"].unique())
